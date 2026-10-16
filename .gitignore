@@ -1,0 +1,28 @@
+# Xcode user-specific data (contains device names, window state)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+
+# Build output
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# macOS junk
+.DS_Store
+
+# Secrets
+.env
+*.p12
+*.mobileprovision
+*.cer
+*.certSigningRequest
+
+# Python (server side later)
+__pycache__/
+.venv/
+*.pt
+*.pth
+*.mlpackage
