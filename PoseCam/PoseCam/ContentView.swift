@@ -54,12 +54,19 @@ struct ContentView: View {
                             .position(point(p, geo.size))
                     }
                 }
+                // ViTPose keypoints in orange
+                ForEach(camera.vitJoints.indices, id: \.self) { i in
+                    Circle()
+                        .fill(.orange)
+                        .frame(width: 10, height: 10)
+                        .position(point(camera.vitJoints[i], geo.size))
+                }
             }
             .ignoresSafeArea()
 
             // Stats text, top
             VStack {
-                Text(camera.stats)
+                Text(camera.stats + "\nViT: " + camera.vitStatus)
                     .font(.system(size: 11, design: .monospaced))
                     .multilineTextAlignment(.leading)
                     .foregroundStyle(.white)

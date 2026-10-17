@@ -14,10 +14,18 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
     var joints: [VNHumanBodyPose3DObservation.JointName: CGPoint] = [:]  // joint name -> 2D image position, for the camera overlay
     var joints3D: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [:]  // true 3D position in meters, relative to the hip
     var stats = ""  // stats text shown on screen
+    var vitStatus = "loading"  // shown on screen: loading, ready or FAILED
     private var lastStatTime = CFAbsoluteTimeGetCurrent()  // when stats were last updated
     private var framesSinceStat = 0  // frames processed in the current 1-second window
     private var latencySum = 0.0     // summed latency in that window, for the average
     private var cameraFramesSinceStat = 0  // frames delivered by camera, including dropped ones
+    private var vit: ViTPoseRunner?  // our ViTPose Core ML model (nil if it failed to load)
+    var vitJoints: [CGPoint] = []      // 17 ViTPose keypoints (normalized, y up), for drawing
+    private var lastVit: [(point: CGPoint, conf: Float)] = []  // latest ViTPose result, all 17 keypoints (frame queue only)
+    private var diffSum = 0.0   // summed model difference in the 1-second window
+    private var diffCount = 0   // frames that were compared
+    private var vitMsSum = 0.0         // summed ViTPose time in the 1-second window, for the average
+    
 
     func start() {
         AVCaptureDevice.requestAccess(for: .video) { granted in
@@ -25,6 +33,11 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
             self.queue.async {
                 self.configure()
                 self.session.startRunning()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let runner = ViTPoseRunner()
+                    self.queue.async { self.vit = runner }
+                    DispatchQueue.main.async { self.vitStatus = runner == nil ? "FAILED" : "ready" }
+                }
             }
         }
     }
@@ -43,7 +56,7 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
         // Pick a format by resolution and fps instead of a preset
         let targetWidth: Int32 = 1920
         let targetHeight: Int32 = 1080
-        let targetFPS: Double = 120
+        let targetFPS: Double = 60
 
         let match = device.formats.first { format in
             let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
@@ -83,6 +96,17 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
         do {
             try handler.perform([poseRequest])
             let ms = (CFAbsoluteTimeGetCurrent() - start) * 1000
+
+            // ViTPose on the same frame, timed separately from Apple's model
+            let vitStart = CFAbsoluteTimeGetCurrent()
+            if let vit, let kps = vit.run(handler) {
+                lastVit = kps
+                vitMsSum += (CFAbsoluteTimeGetCurrent() - vitStart) * 1000
+                let pts = kps.filter { $0.conf > 0.3 }.map { $0.point }
+                DispatchQueue.main.async { self.vitJoints = pts }
+            }
+
+            // Apple's 3D pose
             if let obs = poseRequest.results?.first,
                let points = try? obs.recognizedPoints(.all) {
                 var pts: [VNHumanBodyPose3DObservation.JointName: CGPoint] = [:]
@@ -92,19 +116,49 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
                     // translation column of the 4x4 matrix = x, y, z in meters relative to the hip
                     pts3D[name] = SIMD3<Float>(p.position.columns.3.x, p.position.columns.3.y, p.position.columns.3.z)
                 }
+
+                // Difference between the two models on the 12 shared joints, in pixels of the 1080x1920 portrait frame
+                let pairs: [(VNHumanBodyPose3DObservation.JointName, Int)] = [  // (Apple joint, ViTPose COCO index)
+                    (.leftShoulder, 5), (.rightShoulder, 6), (.leftElbow, 7), (.rightElbow, 8),
+                    (.leftWrist, 9), (.rightWrist, 10), (.leftHip, 11), (.rightHip, 12),
+                    (.leftKnee, 13), (.rightKnee, 14), (.leftAnkle, 15), (.rightAnkle, 16)
+                ]
+                var total = 0.0
+                var n = 0
+                if lastVit.count == 17 {
+                    for (name, idx) in pairs {
+                        guard let a = pts[name], lastVit[idx].conf > 0.3 else { continue }  // skip joints either model missed
+                        let b = lastVit[idx].point
+                        let dx = Double(a.x - b.x) * 1080, dy = Double(a.y - b.y) * 1920
+                        total += (dx * dx + dy * dy).squareRoot()
+                        n += 1
+                    }
+                }
+                if n > 0 { diffSum += total / Double(n); diffCount += 1 }  // average distance for this frame
+
                 DispatchQueue.main.async {
                     self.joints = pts
                     self.joints3D = pts3D
                 }
+            } else {
+                // nobody detected: clear the overlay and the side view
+                DispatchQueue.main.async {
+                    self.joints = [:]
+                    self.joints3D = [:]
+                }
             }
+
             framesSinceStat += 1
             latencySum += ms
             let now = CFAbsoluteTimeGetCurrent()
             if now - lastStatTime >= 1.0 {
                 let fps = Double(framesSinceStat) / (now - lastStatTime)
-                let text = String(format: "Cam FPS %.0f | Proc FPS %.0f | latency %.0f ms\nApp CPU %.0f%% | RAM %.0f MB\nSys CPU %.0f%% | RAM %.0f MB\nthermal %@",
+                let diffAvg = diffCount > 0 ? diffSum / Double(diffCount) : 0  // average disagreement over the last second
+                let text = String(format: "Cam FPS %.0f | Proc FPS %.0f | Apple %.0f ms | ViT %.0f ms\nModel diff %.0f px\nApp CPU %.0f%% | RAM %.0f MB\nSys CPU %.0f%% | RAM %.0f MB\nthermal %@",
                                   Double(cameraFramesSinceStat) / (now - lastStatTime),
                                   fps, latencySum / Double(framesSinceStat),
+                                  vitMsSum / Double(framesSinceStat),
+                                  diffAvg,
                                   SystemStats.cpuPercent() / Double(ProcessInfo.processInfo.activeProcessorCount), SystemStats.memoryMB(),
                                   SystemStats.systemCPUPercent(), SystemStats.systemMemoryUsedMB(),
                                   SystemStats.thermal())
@@ -113,6 +167,9 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
                 framesSinceStat = 0
                 cameraFramesSinceStat = 0
                 latencySum = 0
+                vitMsSum = 0
+                diffSum = 0
+                diffCount = 0
                 lastStatTime = now
             }
         } catch {
