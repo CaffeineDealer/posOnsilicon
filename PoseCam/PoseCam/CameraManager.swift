@@ -14,17 +14,61 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
     var joints: [VNHumanBodyPose3DObservation.JointName: CGPoint] = [:]  // joint name -> 2D image position, for the camera overlay
     var joints3D: [VNHumanBodyPose3DObservation.JointName: SIMD3<Float>] = [:]  // true 3D position in meters, relative to the hip
     var stats = ""  // stats text shown on screen
-    var vitStatus = "loading"  // shown on screen: loading, ready or FAILED
+    var vitStatus = "off"  // shown on screen: loading, ready or FAILED
     private var lastStatTime = CFAbsoluteTimeGetCurrent()  // when stats were last updated
     private var framesSinceStat = 0  // frames processed in the current 1-second window
     private var latencySum = 0.0     // summed latency in that window, for the average
     private var cameraFramesSinceStat = 0  // frames delivered by camera, including dropped ones
     private var vit: ViTPoseRunner?  // our ViTPose Core ML model (nil if it failed to load)
+    var vitButtonOn = false    // drives the button label on screen
+
+    func setVit(_ on: Bool) {
+        vitButtonOn = on
+        if on {
+            vitStatus = "loading"
+            DispatchQueue.global(qos: .userInitiated).async {
+                let runner = ViTPoseRunner()  // the model loads here, only when requested
+                DispatchQueue.main.async {
+                    guard self.vitButtonOn else { return }  // turned off while loading: drop it
+                    self.vitStatus = runner == nil ? "FAILED" : "ready"
+                    self.queue.async { self.vit = runner }
+                }
+            }
+        } else {
+            vitStatus = "off"
+            queue.async {
+                self.vit = nil        // releases the model so its memory is freed
+                self.lastVit = []     // model diff stops using old points
+                DispatchQueue.main.async { self.vitJoints = [] }  // runs after any pending frame update, so the dots stay cleared
+            }
+        }
+    }
+    func setSam(_ on: Bool) {
+        samButtonOn = on
+        if on {
+            samStatus = "loading"
+            DispatchQueue.global(qos: .userInitiated).async {
+                let runner = SAM3DRunner()  // the model loads here, only when requested
+                DispatchQueue.main.async {
+                    guard self.samButtonOn else { return }  // turned off while loading: drop it
+                    self.samStatus = runner == nil ? "FAILED" : "ready"
+                    self.queue.async { self.sam = runner }
+                }
+            }
+        } else {
+            samStatus = "off"
+            queue.async { self.sam = nil }  // releases the model so its memory is freed
+        }
+    }
     var vitJoints: [CGPoint] = []      // 17 ViTPose keypoints (normalized, y up), for drawing
     private var lastVit: [(point: CGPoint, conf: Float)] = []  // latest ViTPose result, all 17 keypoints (frame queue only)
     private var diffSum = 0.0   // summed model difference in the 1-second window
     private var diffCount = 0   // frames that were compared
     private var vitMsSum = 0.0         // summed ViTPose time in the 1-second window, for the average
+    private var sam: SAM3DRunner?  // SAM 3D Body encoder, loaded in the background (nil until ready)
+    private var samMsSum = 0.0  // summed SAM3D encoder time in the 1-second window, for the average
+    var samStatus = "off"      // shown on screen: loading, FAILED, or last run time
+    var samButtonOn = false    // drives the button label on screen
     
 
     func start() {
@@ -33,11 +77,6 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
             self.queue.async {
                 self.configure()
                 self.session.startRunning()
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let runner = ViTPoseRunner()
-                    self.queue.async { self.vit = runner }
-                    DispatchQueue.main.async { self.vitStatus = runner == nil ? "FAILED" : "ready" }
-                }
             }
         }
     }
@@ -105,6 +144,7 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
                 let pts = kps.filter { $0.conf > 0.3 }.map { $0.point }
                 DispatchQueue.main.async { self.vitJoints = pts }
             }
+            if let sam, let ms = sam.run(handler) { samMsSum += ms }
 
             // Apple's 3D pose
             if let obs = poseRequest.results?.first,
@@ -154,10 +194,11 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
             if now - lastStatTime >= 1.0 {
                 let fps = Double(framesSinceStat) / (now - lastStatTime)
                 let diffAvg = diffCount > 0 ? diffSum / Double(diffCount) : 0  // average disagreement over the last second
-                let text = String(format: "Cam FPS %.0f | Proc FPS %.0f | Apple %.0f ms | ViT %.0f ms\nModel diff %.0f px\nApp CPU %.0f%% | RAM %.0f MB\nSys CPU %.0f%% | RAM %.0f MB\nthermal %@",
+                let text = String(format: "Cam FPS %.0f | Proc FPS %.0f\nApple %.0f ms | ViT %.0f ms | SAM3D %.0f ms\nModel diff %.0f px\nApp CPU %.0f%% | RAM %.0f MB\nSys CPU %.0f%% | RAM %.0f MB\nthermal %@",
                                   Double(cameraFramesSinceStat) / (now - lastStatTime),
                                   fps, latencySum / Double(framesSinceStat),
                                   vitMsSum / Double(framesSinceStat),
+                                  samMsSum / Double(framesSinceStat),
                                   diffAvg,
                                   SystemStats.cpuPercent() / Double(ProcessInfo.processInfo.activeProcessorCount), SystemStats.memoryMB(),
                                   SystemStats.systemCPUPercent(), SystemStats.systemMemoryUsedMB(),
@@ -168,6 +209,7 @@ nonisolated final class CameraManager: NSObject, AVCaptureVideoDataOutputSampleB
                 cameraFramesSinceStat = 0
                 latencySum = 0
                 vitMsSum = 0
+                samMsSum = 0
                 diffSum = 0
                 diffCount = 0
                 lastStatTime = now

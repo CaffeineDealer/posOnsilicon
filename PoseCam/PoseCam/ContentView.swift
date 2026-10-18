@@ -54,6 +54,7 @@ struct ContentView: View {
                             .position(point(p, geo.size))
                     }
                 }
+
                 // ViTPose keypoints in orange
                 ForEach(camera.vitJoints.indices, id: \.self) { i in
                     Circle()
@@ -66,7 +67,7 @@ struct ContentView: View {
 
             // Stats text, top
             VStack {
-                Text(camera.stats + "\nViT: " + camera.vitStatus)
+                Text(camera.stats + "\nViT: " + camera.vitStatus + " | SAM3D: " + camera.samStatus)
                     .font(.system(size: 11, design: .monospaced))
                     .multilineTextAlignment(.leading)
                     .foregroundStyle(.white)
@@ -98,6 +99,27 @@ struct ContentView: View {
                     .frame(width: 160, height: 220)
                     .padding(8)
                 }
+            }
+
+            // ViTPose on/off button, bottom left
+            VStack {
+                Spacer()
+                HStack {
+                    Button(camera.vitButtonOn ? "ViTPose: ON" : "ViTPose: OFF") {
+                        camera.setVit(!camera.vitButtonOn)
+                    }
+                    .padding(8)
+                    .background(.black.opacity(0.6))
+                    .foregroundStyle(camera.vitButtonOn ? .orange : .white)
+                    Button(camera.samButtonOn ? "SAM3D: ON" : "SAM3D: OFF") {
+                        camera.setSam(!camera.samButtonOn)
+                    }
+                    .padding(8)
+                    .background(.black.opacity(0.6))
+                    .foregroundStyle(.white)
+                    Spacer()
+                }
+                .padding(8)
             }
         }
         .onAppear { camera.start() }
