@@ -62,12 +62,20 @@ struct ContentView: View {
                         .frame(width: 10, height: 10)
                         .position(point(camera.vitJoints[i], geo.size))
                 }
+
+                // SAM 3D Body keypoints in magenta
+                ForEach(camera.samJoints.indices, id: \.self) { i in
+                    Circle()
+                        .fill(Color(red: 1, green: 0, blue: 1))
+                        .frame(width: 8, height: 8)
+                        .position(point(camera.samJoints[i], geo.size))
+                }
             }
             .ignoresSafeArea()
 
             // Stats text, top
             VStack {
-                Text(camera.stats + "\nViT: " + camera.vitStatus + " | SAM3D: " + camera.samStatus)
+                Text(camera.stats + "\nApple: " + (camera.appleButtonOn ? "on" : "off") + " | ViT: " + camera.vitStatus + " | SAM3D: " + camera.samStatus)
                     .font(.system(size: 11, design: .monospaced))
                     .multilineTextAlignment(.leading)
                     .foregroundStyle(.white)
@@ -101,10 +109,44 @@ struct ContentView: View {
                 }
             }
 
+            // debug: the 512 x 512 crop SAM 3D saw, with its keypoints, bottom left above the buttons
+            if let crop = camera.samCrop {
+                VStack {
+                    Spacer()
+                    HStack {
+                        ZStack {
+                            Image(decorative: crop, scale: 1).resizable().frame(width: 160, height: 160)
+                            ForEach(camera.samCropJoints.indices, id: \.self) { i in
+                                Circle()
+                                    .fill(Color(red: 1, green: 0, blue: 1))
+                                    .frame(width: 4, height: 4)
+                                    .position(x: camera.samCropJoints[i].x * 160, y: camera.samCropJoints[i].y * 160)
+                            }
+                        }
+                        .frame(width: 160, height: 160)
+                        Spacer()
+                    }
+                    .padding(.leading, 8)
+                    .padding(.bottom, 70)  // above the buttons
+                }
+            }
+
             // ViTPose on/off button, bottom left
             VStack {
                 Spacer()
                 HStack {
+                    Button("\(camera.cameraFPS) fps") {  // cycles 60 -> 120 -> 240
+                        camera.nextFPS()
+                    }
+                    .padding(8)
+                    .background(.black.opacity(0.6))
+                    .foregroundStyle(.white)
+                    Button(camera.appleButtonOn ? "Apple: ON" : "Apple: OFF") {
+                        camera.setApple(!camera.appleButtonOn)
+                    }
+                    .padding(8)
+                    .background(.black.opacity(0.6))
+                    .foregroundStyle(camera.appleButtonOn ? .green : .white)
                     Button(camera.vitButtonOn ? "ViTPose: ON" : "ViTPose: OFF") {
                         camera.setVit(!camera.vitButtonOn)
                     }

@@ -1,23 +1,24 @@
-import CoreML   // loads the converted model
-import Vision   // resizes the camera frame to 512x512 and feeds the model
+import CoreML   // loads the converted model and runs it directly (no Vision: the input is already the 512x512 crop)
 
 nonisolated final class SAM3DRunner: @unchecked Sendable {
-    private let request: VNCoreMLRequest
+    private let model: MLModel
 
     init?() {
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndNeuralEngine  // Neural Engine allowed
+        config.computeUnits = .cpuAndGPU  // GPU (CPU only for ops the GPU can't run): on the CPU alone the keypoints collapse; the Neural Engine compile fails
         guard let url = Bundle.main.url(forResource: "sam3d_backbone", withExtension: "mlmodelc"),  // compiled model inside the app
-              let ml = try? MLModel(contentsOf: url, configuration: config),
-              let vnModel = try? VNCoreMLModel(for: ml) else { return nil }
-        request = VNCoreMLRequest(model: vnModel)
-        request.imageCropAndScaleOption = .scaleFill  // squashes the whole frame to 512x512 for now
+              let ml = try? MLModel(contentsOf: url, configuration: config) else { return nil }
+        model = ml
     }
 
-    // Runs the encoder on one camera frame and returns the time in ms (nil if it failed)
-    func run(_ handler: VNImageRequestHandler) -> Double? {
-        let t0 = CFAbsoluteTimeGetCurrent()
-        guard (try? handler.perform([request])) != nil else { return nil }
-        return (CFAbsoluteTimeGetCurrent() - t0) * 1000
+    // Runs the encoder on a 512 x 512 BGRA crop; returns the image features (1, 1280, 32, 32), or nil if it failed
+    func run(crop: CVPixelBuffer) -> MLMultiArray? {
+        do {
+            let input = try MLDictionaryFeatureProvider(dictionary: ["image": MLFeatureValue(pixelBuffer: crop)])  // the model's image input
+            return try model.prediction(from: input).featureValue(for: "features")?.multiArrayValue
+        } catch {
+            print("SAM3D encoder failed: \(error)")
+            return nil
+        }
     }
 }
