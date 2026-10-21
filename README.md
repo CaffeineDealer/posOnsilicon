@@ -94,4 +94,4 @@ Thermal state reaches "serious" with several models running at high frame rates.
 
 ## License
 
-Not chosen yet. The models keep their own licenses: ViTPose (from its authors) and SAM 3D Body (Meta).
+My code in this repo is under the MIT License (see `LICENSE`). The models keep their own licenses: ViTPose (from its authors) and SAM 3D Body (Meta).
