@@ -56,19 +56,21 @@ struct ContentView: View {
                 }
 
                 // ViTPose keypoints in orange
-                ForEach(camera.vitJoints.indices, id: \.self) { i in
+                // loop over the points themselves, so clearing the array can't leave a stale index
+                ForEach(Array(camera.vitJoints.enumerated()), id: \.offset) { _, p in
                     Circle()
                         .fill(.orange)
                         .frame(width: 10, height: 10)
-                        .position(point(camera.vitJoints[i], geo.size))
+                        .position(point(p, geo.size))
                 }
 
                 // SAM 3D Body keypoints in magenta
-                ForEach(camera.samJoints.indices, id: \.self) { i in
+                // same fix: no index into the live array
+                ForEach(Array(camera.samJoints.enumerated()), id: \.offset) { _, p in
                     Circle()
                         .fill(Color(red: 1, green: 0, blue: 1))
                         .frame(width: 8, height: 8)
-                        .position(point(camera.samJoints[i], geo.size))
+                        .position(point(p, geo.size))
                 }
             }
             .ignoresSafeArea()
@@ -116,11 +118,12 @@ struct ContentView: View {
                     HStack {
                         ZStack {
                             Image(decorative: crop, scale: 1).resizable().frame(width: 160, height: 160)
-                            ForEach(camera.samCropJoints.indices, id: \.self) { i in
+                            // same fix: no index into the live array
+                            ForEach(Array(camera.samCropJoints.enumerated()), id: \.offset) { _, p in
                                 Circle()
                                     .fill(Color(red: 1, green: 0, blue: 1))
                                     .frame(width: 4, height: 4)
-                                    .position(x: camera.samCropJoints[i].x * 160, y: camera.samCropJoints[i].y * 160)
+                                    .position(x: p.x * 160, y: p.y * 160)
                             }
                         }
                         .frame(width: 160, height: 160)
